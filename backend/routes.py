@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi.responses import StreamingResponse, HTMLResponse
 
 from config import client, DEFAULT_MODEL
-from models import ChatRequest, TutorRequest, TutorResponse
+from models import ChatRequest, TutorRequest, ResetRequest, TutorResponse
 from prompts import TUTOR_PROMPT
 from sessions import store
 
@@ -103,6 +103,6 @@ def register_routes(app):
         return StreamingResponse(generate(), media_type="text/event-stream")
 
     @app.post("/api/tutor/reset")
-    def tutor_reset(req: TutorRequest):
+    def tutor_reset(req: ResetRequest):
         store.clear(req.session_id)
         return {"status": "ok"}

@@ -61,7 +61,7 @@ function resetSession() {
   fetch('/api/tutor/reset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: '', session_id: sessionId })
+    body: JSON.stringify({ session_id: sessionId })
   });
   sessionId = crypto.randomUUID();
   document.getElementById('content').textContent = '';

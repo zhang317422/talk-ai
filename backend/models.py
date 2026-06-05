@@ -23,6 +23,10 @@ class Correction(BaseModel):
     explanation: str
 
 
+class ResetRequest(BaseModel):
+    session_id: str = "default"
+
+
 class TutorResponse(BaseModel):
     reply: str
     corrections: list[Correction] = []
