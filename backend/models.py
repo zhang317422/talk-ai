@@ -14,3 +14,4 @@ class ChatRequest(BaseModel):
 
 class TutorRequest(BaseModel):
     message: str
+    session_id: str = "default"
