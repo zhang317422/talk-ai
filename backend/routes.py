@@ -8,7 +8,7 @@ from openai import APIError, APITimeoutError, RateLimitError
 
 from config import client, DEFAULT_MODEL, logger
 from models import ChatRequest, TutorRequest, ResetRequest, TutorResponse
-from prompts import TUTOR_PROMPT, TUTOR_PROMPT_STREAM
+from prompts import build_tutor_prompt, build_tutor_prompt_stream
 from sessions import store
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -90,7 +90,8 @@ def register_routes(app):
     @app.post("/api/tutor")
     def tutor(req: TutorRequest):
         t0 = time.time()
-        messages = [{"role": "system", "content": TUTOR_PROMPT}]
+        prompt = build_tutor_prompt(req.level, req.scenario)
+        messages = [{"role": "system", "content": prompt}]
         history_len = len(store.get(req.session_id))
         messages.extend(store.get(req.session_id))
         messages.append({"role": "user", "content": req.message})
@@ -126,7 +127,8 @@ def register_routes(app):
     @app.post("/api/tutor/stream")
     def tutor_stream(req: TutorRequest):
         t0 = time.time()
-        messages = [{"role": "system", "content": TUTOR_PROMPT_STREAM}]
+        prompt = build_tutor_prompt_stream(req.level, req.scenario)
+        messages = [{"role": "system", "content": prompt}]
         history_len = len(store.get(req.session_id))
         messages.extend(store.get(req.session_id))
         messages.append({"role": "user", "content": req.message})

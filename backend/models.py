@@ -15,6 +15,8 @@ class ChatRequest(BaseModel):
 class TutorRequest(BaseModel):
     message: str
     session_id: str = "default"
+    level: Literal["beginner", "intermediate", "advanced"] = "intermediate"
+    scenario: Literal["free_talk", "ordering_food", "checking_in", "asking_directions", "job_interview", "shopping", "at_restaurant"] = "free_talk"
 
 
 class Correction(BaseModel):

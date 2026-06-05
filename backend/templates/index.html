@@ -23,9 +23,11 @@ button.reset:hover { background: #666; }
 .correction-item .mistake { color: #f87171; }
 .correction-item .correct { color: #4ade80; }
 .correction-item .explanation { color: #888; font-size: 13px; margin-top: 2px; }
-.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.tabs { display: flex; gap: 4px; }
 .tab { padding: 8px 16px; border-radius: 6px; border: 1px solid #333; background: transparent; color: #aaa; font-size: 13px; }
 .tab.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.settings { display: flex; gap: 8px; margin-bottom: 12px; }
+.settings select { padding: 6px 10px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #eee; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -36,6 +38,22 @@ button.reset:hover { background: #666; }
     <button class="tab" onclick="switchMode('normal')">Normal</button>
   </div>
   <button class="reset" onclick="resetSession()">New Session</button>
+</div>
+<div class="settings">
+  <select id="levelSelect">
+    <option value="beginner">Beginner</option>
+    <option value="intermediate" selected>Intermediate</option>
+    <option value="advanced">Advanced</option>
+  </select>
+  <select id="scenarioSelect">
+    <option value="free_talk">Free Talk</option>
+    <option value="ordering_food">Ordering Food</option>
+    <option value="checking_in">Hotel Check-in</option>
+    <option value="asking_directions">Asking Directions</option>
+    <option value="job_interview">Job Interview</option>
+    <option value="shopping">Shopping</option>
+    <option value="at_restaurant">At Restaurant</option>
+  </select>
 </div>
 <div class="input-area">
   <input id="msgInput" type="text" placeholder="Say something in English or Chinese..." onkeydown="if(event.key==='Enter')send()" />
@@ -79,6 +97,13 @@ function renderCorrections(corrections) {
   ).join('');
 }
 
+function getParams() {
+  return {
+    level: document.getElementById('levelSelect').value,
+    scenario: document.getElementById('scenarioSelect').value
+  };
+}
+
 function send() {
   const input = document.getElementById('msgInput');
   const content = document.getElementById('content');
@@ -89,6 +114,7 @@ function send() {
   if (!text) return;
 
   correctionsEl.style.display = 'none';
+  const params = getParams();
 
   if (mode === 'stream') {
     content.textContent = '';
@@ -98,7 +124,7 @@ function send() {
     fetch('/api/tutor/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, session_id: sessionId })
+      body: JSON.stringify({ message: text, session_id: sessionId, ...params })
     }).then(response => {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -138,7 +164,7 @@ function send() {
     fetch('/api/tutor', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, session_id: sessionId })
+      body: JSON.stringify({ message: text, session_id: sessionId, ...params })
     }).then(r => r.json()).then(data => {
       content.textContent = data.reply;
       renderCorrections(data.corrections || []);
