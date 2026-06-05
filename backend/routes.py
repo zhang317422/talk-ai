@@ -8,18 +8,43 @@ from openai import APIError, APITimeoutError, RateLimitError
 
 from config import client, DEFAULT_MODEL, logger
 from models import ChatRequest, TutorRequest, ResetRequest, TutorResponse
-from prompts import TUTOR_PROMPT
+from prompts import TUTOR_PROMPT, TUTOR_PROMPT_STREAM
 from sessions import store
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
-def _parse_tutor_output(raw: str) -> TutorResponse:
+def _parse_json_output(raw: str) -> TutorResponse:
     try:
         data = json.loads(raw)
         return TutorResponse(**data)
     except (json.JSONDecodeError, Exception):
         return TutorResponse(reply=raw, corrections=[])
+
+
+def _parse_stream_output(raw: str) -> TutorResponse:
+    if "--- Corrections ---" not in raw:
+        return TutorResponse(reply=raw, corrections=[])
+    parts = raw.split("--- Corrections ---", 1)
+    reply = parts[0].strip()
+    corrections_block = parts[1].strip()
+    corrections = _parse_corrections_text(corrections_block)
+    return TutorResponse(reply=reply, corrections=corrections)
+
+
+def _parse_corrections_text(text: str) -> list:
+    corrections = []
+    blocks = text.strip().split("\n\n")
+    for block in blocks:
+        lines = block.strip().split("\n")
+        item = {}
+        for line in lines:
+            for key in ("Mistake", "Correct", "Explanation"):
+                if line.startswith(f"{key}:"):
+                    item[key.lower()] = line[len(key) + 1 :].strip()
+        if "mistake" in item:
+            corrections.append(item)
+    return corrections
 
 
 def register_routes(app):
@@ -80,7 +105,7 @@ def register_routes(app):
 
         raw = response.choices[0].message.content
         usage = response.usage
-        result = _parse_tutor_output(raw)
+        result = _parse_json_output(raw)
         store.append(req.session_id, "user", req.message)
         store.append(req.session_id, "assistant", result.model_dump_json())
         elapsed = (time.time() - t0) * 1000
@@ -96,7 +121,7 @@ def register_routes(app):
     @app.post("/api/tutor/stream")
     def tutor_stream(req: TutorRequest):
         t0 = time.time()
-        messages = [{"role": "system", "content": TUTOR_PROMPT}]
+        messages = [{"role": "system", "content": TUTOR_PROMPT_STREAM}]
         history_len = len(store.get(req.session_id))
         messages.extend(store.get(req.session_id))
         messages.append({"role": "user", "content": req.message})
@@ -134,7 +159,7 @@ def register_routes(app):
                 return
 
             raw = "".join(full_raw)
-            result = _parse_tutor_output(raw)
+            result = _parse_stream_output(raw)
             store.append(req.session_id, "user", req.message)
             store.append(req.session_id, "assistant", result.model_dump_json())
 
