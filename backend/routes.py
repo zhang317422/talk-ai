@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 
 from fastapi import HTTPException
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, FileResponse
 from openai import APIError, APITimeoutError, RateLimitError
 
 from config import client, DEFAULT_MODEL, logger
@@ -56,6 +56,11 @@ def register_routes(app):
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
+
+    @app.get("/api")
+    def api_docs():
+        api_md = Path(__file__).parent.parent / "API.md"
+        return FileResponse(api_md, media_type="text/markdown; charset=utf-8")
 
     @app.post("/api/chat")
     def chat(req: ChatRequest):
