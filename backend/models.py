@@ -15,3 +15,14 @@ class ChatRequest(BaseModel):
 class TutorRequest(BaseModel):
     message: str
     session_id: str = "default"
+
+
+class Correction(BaseModel):
+    mistake: str
+    correct: str
+    explanation: str
+
+
+class TutorResponse(BaseModel):
+    reply: str
+    corrections: list[Correction] = []
