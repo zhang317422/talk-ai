@@ -2,7 +2,9 @@ import json
 import time
 from pathlib import Path
 
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
+from openai import APIError, APITimeoutError, RateLimitError
 
 from config import client, DEFAULT_MODEL, logger
 from models import ChatRequest, TutorRequest, ResetRequest, TutorResponse
@@ -63,10 +65,19 @@ def register_routes(app):
         messages.extend(store.get(req.session_id))
         messages.append({"role": "user", "content": req.message})
 
-        response = client.chat.completions.create(
-            model=DEFAULT_MODEL,
-            messages=messages,
-        )
+        try:
+            response = client.chat.completions.create(
+                model=DEFAULT_MODEL,
+                messages=messages,
+            )
+        except RateLimitError:
+            raise HTTPException(status_code=429, detail="Service busy, please retry later")
+        except APITimeoutError:
+            raise HTTPException(status_code=504, detail="AI service timeout, please retry")
+        except APIError as e:
+            logger.error("API error: %s", e)
+            raise HTTPException(status_code=502, detail="AI service error")
+
         raw = response.choices[0].message.content
         usage = response.usage
         result = _parse_tutor_output(raw)
@@ -90,23 +101,37 @@ def register_routes(app):
         messages.extend(store.get(req.session_id))
         messages.append({"role": "user", "content": req.message})
 
-        stream = client.chat.completions.create(
-            model=DEFAULT_MODEL,
-            messages=messages,
-            stream=True,
-        )
+        try:
+            stream = client.chat.completions.create(
+                model=DEFAULT_MODEL,
+                messages=messages,
+                stream=True,
+            )
+        except RateLimitError:
+            raise HTTPException(status_code=429, detail="Service busy, please retry later")
+        except APITimeoutError:
+            raise HTTPException(status_code=504, detail="AI service timeout, please retry")
+        except APIError as e:
+            logger.error("API error: %s", e)
+            raise HTTPException(status_code=502, detail="AI service error")
 
         full_raw = []
         chunk_count = 0
 
         def generate():
             nonlocal chunk_count
-            for chunk in stream:
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    full_raw.append(delta.content)
-                    chunk_count += 1
-                    yield f"data: {json.dumps({'content': delta.content})}\n\n"
+            try:
+                for chunk in stream:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        full_raw.append(delta.content)
+                        chunk_count += 1
+                        yield f"data: {json.dumps({'content': delta.content})}\n\n"
+            except APIError as e:
+                logger.error("Stream API error: %s", e)
+                yield f"data: {json.dumps({'error': 'AI service error'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
             raw = "".join(full_raw)
             result = _parse_tutor_output(raw)
