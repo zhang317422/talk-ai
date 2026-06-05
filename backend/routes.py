@@ -1,9 +1,10 @@
 import json
+import time
 from pathlib import Path
 
 from fastapi.responses import StreamingResponse, HTMLResponse
 
-from config import client, DEFAULT_MODEL
+from config import client, DEFAULT_MODEL, logger
 from models import ChatRequest, TutorRequest, ResetRequest, TutorResponse
 from prompts import TUTOR_PROMPT
 from sessions import store
@@ -56,7 +57,9 @@ def register_routes(app):
 
     @app.post("/api/tutor")
     def tutor(req: TutorRequest):
+        t0 = time.time()
         messages = [{"role": "system", "content": TUTOR_PROMPT}]
+        history_len = len(store.get(req.session_id))
         messages.extend(store.get(req.session_id))
         messages.append({"role": "user", "content": req.message})
 
@@ -65,14 +68,25 @@ def register_routes(app):
             messages=messages,
         )
         raw = response.choices[0].message.content
+        usage = response.usage
         result = _parse_tutor_output(raw)
         store.append(req.session_id, "user", req.message)
         store.append(req.session_id, "assistant", result.model_dump_json())
+        elapsed = (time.time() - t0) * 1000
+        logger.info(
+            "tutor session=%s history=%d tokens_in=%d tokens_out=%d time=%dms",
+            req.session_id, history_len,
+            usage.prompt_tokens if usage else 0,
+            usage.completion_tokens if usage else 0,
+            int(elapsed),
+        )
         return result
 
     @app.post("/api/tutor/stream")
     def tutor_stream(req: TutorRequest):
+        t0 = time.time()
         messages = [{"role": "system", "content": TUTOR_PROMPT}]
+        history_len = len(store.get(req.session_id))
         messages.extend(store.get(req.session_id))
         messages.append({"role": "user", "content": req.message})
 
@@ -83,12 +97,15 @@ def register_routes(app):
         )
 
         full_raw = []
+        chunk_count = 0
 
         def generate():
+            nonlocal chunk_count
             for chunk in stream:
                 delta = chunk.choices[0].delta
                 if delta.content:
                     full_raw.append(delta.content)
+                    chunk_count += 1
                     yield f"data: {json.dumps({'content': delta.content})}\n\n"
 
             raw = "".join(full_raw)
@@ -99,6 +116,12 @@ def register_routes(app):
             if result.corrections:
                 yield f"data: {json.dumps({'corrections': [c.model_dump() for c in result.corrections]})}\n\n"
             yield "data: [DONE]\n\n"
+
+            elapsed = (time.time() - t0) * 1000
+            logger.info(
+                "tutor_stream session=%s history=%d chunks=%d time=%dms",
+                req.session_id, history_len, chunk_count, int(elapsed),
+            )
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
