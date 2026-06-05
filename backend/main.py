@@ -1,7 +1,10 @@
 import os
 from dotenv import load_dotenv
+import json
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel
 from typing import Literal
@@ -46,6 +49,24 @@ def chat(req: ChatRequest):
         messages=[m.model_dump() for m in req.messages],
     )
     return {"reply": response.choices[0].message.content}
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest):
+    stream = client.chat.completions.create(
+        model=req.model,
+        messages=[m.model_dump() for m in req.messages],
+        stream=True,
+    )
+
+    def generate():
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield f"data: {json.dumps({'content': delta.content})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":
