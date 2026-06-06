@@ -1,16 +1,17 @@
 import streamlit as st
 from streamlit_mic_recorder import mic_recorder
-import requests  # 导入网络请求库，用来连接后端
+import requests
 
 # 1. 网页基础配置（必须写在最前面）
 st.set_page_config(page_title="AI口语教练", layout="wide")
 
-# 配置后端接口地址
-BACKEND_URL = "http://localhost:8000/api/tutor"
+# 核心升级：对接搭档的流式输出接口路径！
+BACKEND_STREAM_URL = "http://localhost:8000/api/tutor/stream"
 
 # 2. 网页左侧：控制面板
 with st.sidebar:
     st.title("🛠️ 教学控制台")
+    # 场景选择优化：直接联动后端
     scene = st.selectbox("🎯 选择练习场景", ["外企职场抗压", "雅思口语模拟", "深夜酒馆闲聊"])
     st.markdown("---")
     st.subheader("💡 实时语法纠错卡片")
@@ -30,53 +31,94 @@ for msg in st.session_state.messages:
 
 st.markdown("---")
 
-# 4. 网页底部的录音按钮（保留作为前端界面展示）
-st.write("👇 可以通过下方按钮录音，或在最底部输入框直接打字：")
-audio = mic_recorder(
-    start_prompt="🎵 开始录音",
-    stop_prompt="🛑 停止录音",
-    key='web_recorder'
-)
+# 4. 优化：使用 Tabs 将文字和语音完全隔离，彻底断绝“录音按钮刷新导致文字重复发送”的 Bug
+tab1, tab2 = st.tabs(["⌨️ 键盘打字练习", "🎵 语音输入练习"])
 
-# 录音成功后的前端交互测试
-if audio:
-    st.success("✅ 前端已成功监听到录音，音频字节大小：" + str(len(audio['bytes'])))
-    st.info("提示：语音识别（STT）接口对接中，请先在下方输入框打字进行对话测试哦！")
+with tab1:
+    # 键盘打字输入
+    user_input = st.chat_input("Say something in English...", key="text_chat_input")
+    if user_input:
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        st.rerun()  # 立即刷新让用户说的话先上屏
+
+with tab2:
+    st.write("👇 点击下方按钮开始录音练习：")
+    audio = mic_recorder(
+        start_prompt="🎵 开始录音",
+        stop_prompt="🛑 停止录音",
+        key='web_recorder'
+    )
+    # 优化：使用 st.toast 代替原先卡在中间的绿色大 banner，视觉降噪
+    if audio:
+        st.toast("✅ 前端已成功监听到音频！", icon="🎚️")
+        st.info("提示：语音识别（STT）接口对接中，请先在『键盘打字练习』标签页测试丝滑流式对话！")
 
 
-# 5. 核心融合：聊天输入框与后端请求
-# st.chat_input 会在网页最底部生成一个标准的聊天输入框
-if user_input := st.chat_input("Say something in English..."):
+# 5. 统一处理发送请求与流式生成（当最新的一条消息是用户发的时候触发）
+if st.session_state.messages[-1]["role"] == "user":
+    last_user_message = st.session_state.messages[-1]["content"]
     
-    # 5.1 把用户说的话存入历史记录，并在前端渲染出来
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
-        st.write(user_input)
-        
-    # 5.2 向搭档的 FastAPI 后端发送请求
     with st.chat_message("assistant"):
-        with st.spinner("AI 正在思考中..."):
+        # 定义一个流式生成器函数，用来实时抓取后端蹦出来的字
+        def response_generator():
             try:
-                # 发送 POST 请求，把用户的话传给后端
+                # 联动 scene 参数，并以流式（stream=True）向后端发请求
                 response = requests.post(
-                    BACKEND_URL,
-                    json={"message": user_input},  # 这里对应的键名 "message" 要看搭档后端的定义
-                    timeout=10 # 设置10秒超时
+                    BACKEND_STREAM_URL,
+                    json={
+                        "message": last_user_message,
+                        "scene": scene
+                    },
+                    stream=True,
+                    timeout=20
                 )
                 
                 if response.status_code == 200:
-                    # 5.3 解析后端返回的 AI 回复
-                    # 注意：如果搭档返回的 JSON 格式不是 {"reply": "..."}, 
-                    # 比如是 {"response": "..."}，需要把下面的 "reply" 换掉
-                    ai_reply = response.json().get("reply", "未能在后端返回中找到 reply 字段")
-                    
-                    # 展示 AI 回复并存入历史记录
-                    st.write(ai_reply)
-                    st.session_state.messages.append({"role": "assistant", "content": ai_reply})
+                    for line in response.iter_lines():
+                        if line:
+                            # 解码并清洗数据
+                            decoded_line = line.decode('utf-8').strip()
+                            
+                            # 过滤 SSE 前缀和无意义的控制行
+                            if decoded_line.startswith("data:"):
+                                decoded_line = decoded_line[5:].strip()
+                            
+                            if not decoded_line or decoded_line in ["[DONE]", "{", "}", ":"]:
+                                continue
+                            
+                            # 💡 终极过滤逻辑：直接清除历史截图里出现过的所有干扰格式标志
+                            clean_chunk = decoded_line
+                            
+                            # 强行剥离所有多余的包裹标签与结构噪音
+                            for noise in ['"content"', '"reply"', 'content:', 'reply:', 'corrections:', '{', '}', '[', ']', '"', '\\', ':']:
+                                clean_chunk = clean_chunk.replace(noise, '')
+                            
+                            # 处理可能混入的换行符和特殊的 Unicode 编码（如 emoji 碎裂编码）
+                            clean_chunk = clean_chunk.replace('n', '').replace('ud83dude0a', '😊').strip()
+                            
+                            # 过滤掉属于语法纠错字段的数据碎屑，防止干扰普通对话
+                            if clean_chunk in ['cor', 're', 'ctions', '']:
+                                continue
+                                
+                            # 💡 还原打字机间距：如果是常见标点直接紧跟，如果是单词则追加合理的空格补位
+                            if clean_chunk:
+                                if clean_chunk in [".", ",", "!", "?", "—", "'s", "'ve", "'ll", "'d", "'m"]:
+                                    yield clean_chunk
+                                else:
+                                    yield " " + clean_chunk
+                                    
                 else:
-                    st.error(f"后端服务器报错，状态码: {response.status_code}")
-                    
+                    yield f"❌ 后端服务器报错，状态码: {response.status_code}"
             except requests.exceptions.ConnectionError:
-                st.error("❌ 无法连接到后端服务器！请确保运行后端的那个终端窗口没关，且运行在 8000 端口。")
+                yield "❌ 无法连接到后端服务器！请确保后端的那个终端窗口没关。"
             except Exception as e:
-                st.error(f"发生未知错误: {e}")
+                yield f"❌ 发生未知错误: {e}"
+
+        # 使用 Streamlit 炫酷的 write_stream 功能，直接实现流畅的打字机蹦字效果！
+        full_response = st.write_stream(response_generator())
+        
+        # 裁剪掉首句可能多出的前导空格
+        full_response = full_response.strip()
+        
+        # 将 AI 最终蹦出来的完整话语存入历史记录，确保刷新不丢失
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
