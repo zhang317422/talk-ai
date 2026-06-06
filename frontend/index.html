@@ -166,6 +166,53 @@ header .api-link:hover { color: var(--text); }
 }
 .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
 .empty-state p { font-size: 14px; line-height: 1.6; }
+
+.recording-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(220,38,38,0.12);
+  pointer-events: none;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.recording-overlay.active { opacity: 1; }
+.recording-overlay .hint {
+  background: rgba(0,0,0,0.85);
+  color: #fff;
+  padding: 16px 32px;
+  border-radius: 12px;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.recording-overlay .hint .dot {
+  width: 12px; height: 12px;
+  background: #dc2626;
+  border-radius: 50%;
+  animation: pulse 1s infinite;
+}
+
+.hint-bar {
+  text-align: center;
+  padding: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.hint-bar kbd {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-family: inherit;
+  color: var(--text);
+}
 </style>
 </head>
 <body>
@@ -207,15 +254,23 @@ header .api-link:hover { color: var(--text); }
   </div>
 </div>
 
+<div class="recording-overlay" id="recordingOverlay">
+  <div class="hint"><span class="dot"></span> Listening...</div>
+</div>
+
 <div class="input-area">
-  <button class="btn mic" id="micBtn" onclick="toggleMic()" title="Voice input">
+  <button class="btn mic" id="micBtn" onclick="toggleMic()" title="Click or hold Space to record">
     🎤
   </button>
-  <input id="msgInput" type="text" placeholder="Type or speak in English..."
+  <input id="msgInput" type="text" placeholder="Type or hold Space to speak..."
          onkeydown="if(event.key==='Enter')sendText()" autofocus />
   <button class="btn send" id="sendBtn" onclick="sendText()">
     ↑
   </button>
+</div>
+
+<div class="hint-bar">
+  <kbd>Space</kbd> hold to speak &nbsp;|&nbsp; <kbd>Esc</kbd> stop AI &nbsp;|&nbsp; <kbd>Enter</kbd> send text
 </div>
 
 <script>
@@ -225,7 +280,9 @@ let sessionId = crypto.randomUUID();
 let speechRate = 0.9;
 let recognition = null;
 let isRecording = false;
-let streamReader = null;
+let spaceHeld = false;
+let spaceHeldTimer = null;
+let abortController = null;
 
 // ── DOM refs ───────────────────────────────────────
 const conversation = document.getElementById('conversation');
@@ -235,6 +292,7 @@ const sendBtn = document.getElementById('sendBtn');
 const micBtn = document.getElementById('micBtn');
 const speedSlider = document.getElementById('speedSlider');
 const speedLabel = document.getElementById('speedLabel');
+const recordingOverlay = document.getElementById('recordingOverlay');
 
 // ── Voice Recognition ──────────────────────────────
 function initRecognition() {
@@ -248,12 +306,12 @@ function initRecognition() {
   return rec;
 }
 
-function toggleMic() {
+function startRecording() {
   if (!recognition) {
     recognition = initRecognition();
     if (!recognition) {
       msgInput.placeholder = 'Speech not supported — type instead';
-      return;
+      return false;
     }
     recognition.onresult = (e) => {
       const text = e.results[0][0].transcript;
@@ -261,26 +319,48 @@ function toggleMic() {
       sendText();
     };
     recognition.onend = () => {
-      isRecording = false;
-      micBtn.classList.remove('recording');
-      micBtn.textContent = '🎤';
+      setRecordingUI(false);
     };
     recognition.onerror = (e) => {
-      isRecording = false;
-      micBtn.classList.remove('recording');
-      micBtn.textContent = '🎤';
+      setRecordingUI(false);
       if (e.error !== 'aborted') msgInput.placeholder = 'Mic error — type instead';
     };
   }
 
-  if (isRecording) {
-    recognition.stop();
-  } else {
+  try {
     recognition.start();
-    isRecording = true;
+    setRecordingUI(true);
+    return true;
+  } catch(e) {
+    return false;
+  }
+}
+
+function stopRecording() {
+  if (recognition && isRecording) {
+    recognition.stop();
+  }
+}
+
+function setRecordingUI(active) {
+  isRecording = active;
+  if (active) {
     micBtn.classList.add('recording');
     micBtn.textContent = '⏹';
     msgInput.placeholder = 'Listening...';
+    recordingOverlay.classList.add('active');
+  } else {
+    micBtn.classList.remove('recording');
+    micBtn.textContent = '🎤';
+    recordingOverlay.classList.remove('active');
+  }
+}
+
+function toggleMic() {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    startRecording();
   }
 }
 
@@ -360,6 +440,15 @@ function escapeHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+// ── Stop AI ────────────────────────────────────────
+function stopAI() {
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+  speechSynthesis.cancel();
+}
+
 // ── Send ───────────────────────────────────────────
 function getParams() {
   return {
@@ -367,8 +456,6 @@ function getParams() {
     scenario: document.getElementById('scenarioSelect').value,
   };
 }
-
-let abortController = null;
 
 async function sendText() {
   const text = msgInput.value.trim();
@@ -453,6 +540,43 @@ async function sendText() {
   msgInput.disabled = false;
   msgInput.focus();
 }
+
+// ── Keyboard ───────────────────────────────────────
+// Space hold: start recording; release: stop and send
+// Esc: stop AI reply + TTS
+
+document.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'Escape') {
+    e.preventDefault();
+    stopAI();
+    stopRecording();
+    sendBtn.disabled = false;
+    msgInput.disabled = false;
+    msgInput.placeholder = 'Type or hold Space to speak...';
+    msgInput.focus();
+    return;
+  }
+  if (e.code !== 'Space') return;
+  // Don't intercept space when focused on input with text
+  if (document.activeElement === msgInput && msgInput.value.trim()) return;
+  // Walkie-talkie: space held = start recording
+  e.preventDefault();
+  if (!spaceHeld && !isRecording) {
+    spaceHeld = true;
+    spaceHeldTimer = Date.now();
+    startRecording();
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space' && spaceHeld) {
+    spaceHeld = false;
+    if (Date.now() - spaceHeldTimer > 300 && isRecording) {
+      stopRecording();
+    }
+  }
+});
 
 // ── Session ────────────────────────────────────────
 function resetSession() {
