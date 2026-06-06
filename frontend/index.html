@@ -262,7 +262,7 @@ header .api-link:hover { color: var(--text); }
       <span id="speedLabel">1.0x</span>
       <input type="range" id="speedSlider" min="0.5" max="1.5" step="0.05" value="0.9" oninput="updateSpeed()">
     </div>
-    <a href="http://localhost:8000/api" target="_blank" class="api-link">API Docs</a>
+    <a href="/api" target="_blank" class="api-link">API Docs</a>
   </div>
 </header>
 
@@ -317,7 +317,6 @@ header .api-link:hover { color: var(--text); }
 
 <script>
 // ── State ──────────────────────────────────────────
-const BACKEND = 'http://localhost:8000';
 let sessionId = crypto.randomUUID();
 let speechRate = 0.9;
 let recognition = null;
@@ -404,36 +403,37 @@ function startRecording() {
   if (!recognition) {
     recognition = initRecognition();
     if (!recognition) return false;
-    recognition.onresult = (e) => {
-      // Store transcript, don't auto-send — wait for Space release
-      pendingTranscript = e.results[0][0].transcript;
-      hasRecognizedSpeech = true;
-      previewText.textContent = 'Rec: ' + pendingTranscript;
-      previewText.classList.add('visible');
-    };
-    recognition.onend = () => {
-      // Recognition ended naturally (user stopped talking)
-      // If Space still held, keep UI on — wait for release
-      if (!spaceHeld) {
-        setRecordingUI(false);
-        flushTranscript();
-      } else {
-        // User still holding — show "silent" hint but keep recording indicator
-        if (hasRecognizedSpeech) {
-          previewText.textContent = 'Rec: ' + pendingTranscript + ' (release to send)';
-        } else {
-          msgInput.placeholder = 'Still listening...';
-        }
-      }
-    };
-    recognition.onerror = (e) => {
-      setRecordingUI(false);
-      spaceHeld = false;
-      pendingTranscript = '';
-      previewText.classList.remove('visible');
-      if (e.error !== 'aborted') msgInput.placeholder = 'Mic error — type instead';
-    };
   }
+
+  recognition.onresult = (e) => {
+    pendingTranscript = e.results[0][0].transcript;
+    hasRecognizedSpeech = true;
+    previewText.textContent = 'Rec: ' + pendingTranscript;
+    previewText.classList.add('visible');
+  };
+  recognition.onend = () => {
+    if (spaceHeld) {
+      if (hasRecognizedSpeech) {
+        previewText.textContent = 'Rec: ' + pendingTranscript + ' (release to send)';
+      } else {
+        msgInput.placeholder = 'Still listening...';
+      }
+    } else if (!isRecording) {
+      // Already stopped via keyup — nothing to do
+      return;
+    } else {
+      setRecordingUI(false);
+      flushTranscript();
+    }
+  };
+  recognition.onerror = (e) => {
+    setRecordingUI(false);
+    spaceHeld = false;
+    pendingTranscript = '';
+    hasRecognizedSpeech = false;
+    previewText.classList.remove('visible');
+    if (e.error !== 'aborted') msgInput.placeholder = 'Mic error — type instead';
+  };
 
   pendingTranscript = '';
   hasRecognizedSpeech = false;
@@ -450,9 +450,13 @@ function startRecording() {
 }
 
 function stopRecording() {
-  if (recognition && isRecording) {
-    recognition.stop();
+  try {
+    if (recognition) recognition.stop();
+  } catch (e) {
+    // ignore — may not have started yet
   }
+  setRecordingUI(false);
+  spaceHeld = false;
 }
 
 function flushTranscript() {
@@ -602,7 +606,7 @@ async function sendText() {
   const tutorMsg = addMessage('tutor', '');
 
   try {
-    const response = await fetch(BACKEND + '/api/tutor/stream', {
+    const response = await fetch('/api/tutor/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, session_id: sessionId, ...params }),
@@ -680,6 +684,7 @@ document.addEventListener('keydown', (e) => {
     stopAI();
     stopRecording();
     pendingTranscript = '';
+    hasRecognizedSpeech = false;
     previewText.classList.remove('visible');
     setRecordingUI(false);
     spaceHeld = false;
@@ -692,18 +697,17 @@ document.addEventListener('keydown', (e) => {
   if (e.code !== 'Space') return;
   // Don't intercept space when focused on input with text
   if (document.activeElement === msgInput && msgInput.value.trim()) return;
-  // Walkie-talkie: space held = start recording
-  // Route through micBtn click so Chrome accepts it as a user gesture
   if (!spaceHeld && !isRecording && micReady) {
     e.preventDefault();
     spaceHeld = true;
-    micBtn.click();
+    startRecording();
   }
 });
 
 document.addEventListener('keyup', (e) => {
   if (e.code === 'Space' && spaceHeld) {
     spaceHeld = false;
+    setRecordingUI(false);
     stopRecording();
     flushTranscript();
   }
@@ -722,7 +726,7 @@ window.addEventListener('focus', () => {
 function resetSession() {
   if (abortController) abortController.abort();
   speechSynthesis.cancel();
-  fetch(BACKEND + '/api/tutor/reset', {
+  fetch('/api/tutor/reset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId }),

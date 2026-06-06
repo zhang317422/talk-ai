@@ -12,6 +12,7 @@ from prompts import build_tutor_prompt, build_tutor_prompt_stream
 from sessions import store
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+FRONTEND_INDEX = Path(__file__).parent.parent / "frontend" / "index.html"
 
 
 def _parse_json_output(raw: str) -> TutorResponse:
@@ -50,8 +51,10 @@ def _parse_corrections_text(text: str) -> list:
 def register_routes(app):
     @app.get("/")
     def index():
-        html = (TEMPLATE_DIR / "index.html").read_text(encoding="utf-8")
-        return HTMLResponse(html)
+        if FRONTEND_INDEX.exists():
+            html = FRONTEND_INDEX.read_text(encoding="utf-8")
+            return HTMLResponse(html)
+        return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
 
     @app.get("/api/health")
     def health():
