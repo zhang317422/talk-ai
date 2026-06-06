@@ -128,6 +128,28 @@ header .api-link:hover { color: var(--text); }
   transition: border-color 0.15s;
 }
 .input-area input:focus { border-color: var(--primary); }
+.input-area.recording input {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220,38,38,0.2);
+}
+.input-area.recording .btn.mic { background: #dc2626; border-color: #dc2626; color: #fff; animation: pulse 1.5s infinite; }
+.input-area .preview-text {
+  position: absolute;
+  bottom: 100%;
+  left: 20px;
+  right: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+  animation: fadeIn 0.2s ease;
+  display: none;
+}
+.input-area .preview-text.visible { display: block; }
+.input-area { position: relative; }
 .btn {
   width: 44px; height: 44px;
   border-radius: 50%;
@@ -277,7 +299,8 @@ header .api-link:hover { color: var(--text); }
   <div class="hint"><span class="dot"></span> Listening...</div>
 </div>
 
-<div class="input-area">
+<div class="input-area" id="inputArea">
+  <div class="preview-text" id="previewText"></div>
   <button class="btn mic" id="micBtn" onclick="toggleMic()" title="Click or hold Space to record" disabled>
     🎤
   </button>
@@ -300,9 +323,10 @@ let speechRate = 0.9;
 let recognition = null;
 let isRecording = false;
 let spaceHeld = false;
-let spaceHeldTimer = null;
 let abortController = null;
 let micReady = false;
+let pendingTranscript = '';
+let hasRecognizedSpeech = false;
 
 // ── DOM refs ───────────────────────────────────────
 const conversation = document.getElementById('conversation');
@@ -312,6 +336,8 @@ const micBtn = document.getElementById('micBtn');
 const speedSlider = document.getElementById('speedSlider');
 const speedLabel = document.getElementById('speedLabel');
 const recordingOverlay = document.getElementById('recordingOverlay');
+const inputArea = document.getElementById('inputArea');
+const previewText = document.getElementById('previewText');
 
 // ── Voice Recognition ──────────────────────────────
 function initRecognition() {
@@ -325,13 +351,23 @@ function initRecognition() {
   return rec;
 }
 
-function enableMic() {
+async function enableMic() {
+  // Step 1: get persistent audio permission via getUserMedia
+  // Once granted, SpeechRecognition won't prompt again for subsequent starts
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach(t => t.stop());
+  } catch (e) {
+    setMicReady(false);
+    return;
+  }
+
+  // Step 2: verify SpeechRecognition works
   const rec = initRecognition();
   if (!rec) {
     msgInput.placeholder = 'Speech not supported — type instead';
     return;
   }
-  // Trigger permission dialog, then immediately stop
   rec.onresult = () => {};
   rec.onend = () => { setMicReady(true); };
   rec.onerror = () => { setMicReady(false); };
@@ -339,7 +375,6 @@ function enableMic() {
     rec.start();
     rec.stop();
   } catch (e) {
-    // Permission denied or not available
     setMicReady(false);
   }
 }
@@ -370,26 +405,45 @@ function startRecording() {
     recognition = initRecognition();
     if (!recognition) return false;
     recognition.onresult = (e) => {
-      const text = e.results[0][0].transcript;
-      msgInput.value = text;
-      sendText();
+      // Store transcript, don't auto-send — wait for Space release
+      pendingTranscript = e.results[0][0].transcript;
+      hasRecognizedSpeech = true;
+      previewText.textContent = 'Rec: ' + pendingTranscript;
+      previewText.classList.add('visible');
     };
     recognition.onend = () => {
-      setRecordingUI(false);
+      // Recognition ended naturally (user stopped talking)
+      // If Space still held, keep UI on — wait for release
+      if (!spaceHeld) {
+        setRecordingUI(false);
+        flushTranscript();
+      } else {
+        // User still holding — show "silent" hint but keep recording indicator
+        if (hasRecognizedSpeech) {
+          previewText.textContent = 'Rec: ' + pendingTranscript + ' (release to send)';
+        } else {
+          msgInput.placeholder = 'Still listening...';
+        }
+      }
     };
     recognition.onerror = (e) => {
       setRecordingUI(false);
       spaceHeld = false;
+      pendingTranscript = '';
+      previewText.classList.remove('visible');
       if (e.error !== 'aborted') msgInput.placeholder = 'Mic error — type instead';
     };
   }
+
+  pendingTranscript = '';
+  hasRecognizedSpeech = false;
+  previewText.classList.remove('visible');
 
   try {
     recognition.start();
     setRecordingUI(true);
     return true;
   } catch (e) {
-    // Permission lost or abort error — reset state
     spaceHeld = false;
     return false;
   }
@@ -401,6 +455,16 @@ function stopRecording() {
   }
 }
 
+function flushTranscript() {
+  if (pendingTranscript.trim()) {
+    msgInput.value = pendingTranscript;
+    sendText();
+  }
+  pendingTranscript = '';
+  hasRecognizedSpeech = false;
+  previewText.classList.remove('visible');
+}
+
 function setRecordingUI(active) {
   isRecording = active;
   if (active) {
@@ -408,16 +472,20 @@ function setRecordingUI(active) {
     micBtn.textContent = '⏹';
     msgInput.placeholder = 'Listening...';
     recordingOverlay.classList.add('active');
+    inputArea.classList.add('recording');
   } else {
     micBtn.classList.remove('recording');
     micBtn.textContent = '🎤';
     recordingOverlay.classList.remove('active');
+    inputArea.classList.remove('recording');
+    previewText.classList.remove('visible');
   }
 }
 
 function toggleMic() {
   if (isRecording) {
     stopRecording();
+    flushTranscript();
   } else {
     startRecording();
   }
@@ -602,7 +670,7 @@ async function sendText() {
 }
 
 // ── Keyboard ───────────────────────────────────────
-// Space hold: start recording; release: stop and send
+// Space hold: start recording; release: stop + send transcript
 // Esc: stop AI reply + TTS
 
 document.addEventListener('keydown', (e) => {
@@ -611,6 +679,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     stopAI();
     stopRecording();
+    pendingTranscript = '';
+    previewText.classList.remove('visible');
+    setRecordingUI(false);
+    spaceHeld = false;
     sendBtn.disabled = false;
     msgInput.disabled = false;
     msgInput.placeholder = 'Hold Space to speak, or type...';
@@ -621,20 +693,19 @@ document.addEventListener('keydown', (e) => {
   // Don't intercept space when focused on input with text
   if (document.activeElement === msgInput && msgInput.value.trim()) return;
   // Walkie-talkie: space held = start recording
+  // Route through micBtn click so Chrome accepts it as a user gesture
   if (!spaceHeld && !isRecording && micReady) {
     e.preventDefault();
     spaceHeld = true;
-    spaceHeldTimer = Date.now();
-    startRecording();
+    micBtn.click();
   }
 });
 
 document.addEventListener('keyup', (e) => {
   if (e.code === 'Space' && spaceHeld) {
     spaceHeld = false;
-    if (Date.now() - spaceHeldTimer > 300 && isRecording) {
-      stopRecording();
-    }
+    stopRecording();
+    flushTranscript();
   }
 });
 
@@ -642,6 +713,8 @@ document.addEventListener('keyup', (e) => {
 window.addEventListener('focus', () => {
   if (spaceHeld && !isRecording) {
     spaceHeld = false;
+    pendingTranscript = '';
+    previewText.classList.remove('visible');
   }
 });
 
