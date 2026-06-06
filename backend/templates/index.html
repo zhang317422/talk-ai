@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Talk AI - English Tutor</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui; max-width: 720px; margin: 40px auto; padding: 0 20px; background: #111; color: #eee; }
+h1 { margin-bottom: 16px; font-size: 20px; }
+.input-area { display: flex; gap: 8px; margin-bottom: 16px; }
+input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #333; background: #1a1a1a; color: #eee; font-size: 15px; }
+button { padding: 10px 20px; border-radius: 8px; border: none; background: #3b82f6; color: #fff; font-size: 15px; cursor: pointer; }
+button:hover { background: #2563eb; }
+button:disabled { opacity: 0.5; cursor: default; }
+button.reset { background: #444; color: #ccc; font-size: 13px; padding: 6px 14px; }
+button.reset:hover { background: #666; }
+.response-box { background: #1a1a1a; border: 1px solid #333; border-radius: 10px; padding: 20px; min-height: 120px; white-space: pre-wrap; line-height: 1.6; }
+.response-box .label { font-size: 11px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+.response-box.streaming { border-color: #3b82f6; }
+.corrections { margin-top: 16px; padding-top: 16px; border-top: 1px solid #333; }
+.correction-item { margin-bottom: 10px; font-size: 14px; }
+.correction-item .mistake { color: #f87171; }
+.correction-item .correct { color: #4ade80; }
+.correction-item .explanation { color: #888; font-size: 13px; margin-top: 2px; }
+.tabs { display: flex; gap: 4px; }
+.tab { padding: 8px 16px; border-radius: 6px; border: 1px solid #333; background: transparent; color: #aaa; font-size: 13px; }
+.tab.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.settings { display: flex; gap: 8px; margin-bottom: 12px; }
+.settings select { padding: 6px 10px; border-radius: 6px; border: 1px solid #333; background: #1a1a1a; color: #eee; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Talk AI - English Tutor</h1>
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+  <div class="tabs" style="margin-bottom:0;">
+    <button class="tab active" onclick="switchMode('stream')">Stream (SSE)</button>
+    <button class="tab" onclick="switchMode('normal')">Normal</button>
+  </div>
+  <button class="reset" onclick="resetSession()">New Session</button>
+</div>
+<div class="settings">
+  <select id="levelSelect">
+    <option value="beginner">Beginner</option>
+    <option value="intermediate" selected>Intermediate</option>
+    <option value="advanced">Advanced</option>
+  </select>
+  <select id="scenarioSelect">
+    <option value="free_talk">Free Talk</option>
+    <option value="ordering_food">Ordering Food</option>
+    <option value="checking_in">Hotel Check-in</option>
+    <option value="asking_directions">Asking Directions</option>
+    <option value="job_interview">Job Interview</option>
+    <option value="shopping">Shopping</option>
+    <option value="at_restaurant">At Restaurant</option>
+  </select>
+</div>
+<div class="input-area">
+  <input id="msgInput" type="text" placeholder="Say something in English or Chinese..." onkeydown="if(event.key==='Enter')send()" />
+  <button id="sendBtn" onclick="send()">Send</button>
+</div>
+<div class="response-box" id="response">
+  <div class="label">Tutor</div>
+  <div id="content"></div>
+  <div id="corrections" class="corrections" style="display:none;"></div>
+</div>
+
+<script>
+let mode = 'stream';
+let sessionId = crypto.randomUUID();
+
+function switchMode(m) {
+  mode = m;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+}
+
+function resetSession() {
+  fetch('/api/tutor/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId })
+  });
+  sessionId = crypto.randomUUID();
+  document.getElementById('content').textContent = '';
+}
+
+function renderCorrections(corrections) {
+  const el = document.getElementById('corrections');
+  el.style.display = corrections.length ? 'block' : 'none';
+  el.innerHTML = corrections.map(c =>
+    `<div class="correction-item">
+      <div><span class="mistake">Mistake:</span> ${c.mistake}</div>
+      <div><span class="correct">Correct:</span> ${c.correct}</div>
+      <div class="explanation">${c.explanation}</div>
+    </div>`
+  ).join('');
+}
+
+function getParams() {
+  return {
+    level: document.getElementById('levelSelect').value,
+    scenario: document.getElementById('scenarioSelect').value
+  };
+}
+
+function send() {
+  const input = document.getElementById('msgInput');
+  const content = document.getElementById('content');
+  const correctionsEl = document.getElementById('corrections');
+  const box = document.getElementById('response');
+  const btn = document.getElementById('sendBtn');
+  const text = input.value.trim();
+  if (!text) return;
+
+  correctionsEl.style.display = 'none';
+  const params = getParams();
+
+  if (mode === 'stream') {
+    content.textContent = '';
+    box.classList.add('streaming');
+    btn.disabled = true;
+
+    fetch('/api/tutor/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, session_id: sessionId, ...params })
+    }).then(response => {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      function read() {
+        reader.read().then(({ done, value }) => {
+          if (done) { box.classList.remove('streaming'); btn.disabled = false; return; }
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\\n');
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            const payload = line.slice(6);
+            if (payload === '[DONE]') break;
+            try {
+              const d = JSON.parse(payload);
+              if (d.content) {
+                content.textContent += d.content;
+              }
+              if (d.corrections) {
+                renderCorrections(d.corrections);
+              }
+            } catch(e) {}
+          }
+          read();
+        });
+      }
+      read();
+    }).catch(err => {
+      content.textContent = 'Error: ' + err.message;
+      box.classList.remove('streaming');
+      btn.disabled = false;
+    });
+  } else {
+    content.textContent = 'Loading...';
+    btn.disabled = true;
+
+    fetch('/api/tutor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, session_id: sessionId, ...params })
+    }).then(r => r.json()).then(data => {
+      content.textContent = data.reply;
+      renderCorrections(data.corrections || []);
+      btn.disabled = false;
+    }).catch(err => {
+      content.textContent = 'Error: ' + err.message;
+      btn.disabled = false;
+    });
+  }
+
+  input.value = '';
+}
+</script>
+</body>
+</html>
