@@ -166,6 +166,23 @@ header .api-link:hover { color: var(--text); }
 }
 .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
 .empty-state p { font-size: 14px; line-height: 1.6; }
+.empty-state .enable-mic-btn {
+  margin-top: 16px;
+  padding: 12px 28px;
+  border-radius: 24px;
+  border: 2px solid var(--primary);
+  background: transparent;
+  color: var(--primary);
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.empty-state .enable-mic-btn:hover { background: var(--primary); color: #fff; }
+.mic-status { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.mic-status.ready { color: var(--success); }
+.mic-status .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
+.mic-status .dot.off { background: var(--muted); }
+.mic-status .dot.on { background: var(--success); }
 
 .recording-overlay {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -249,8 +266,10 @@ header .api-link:hover { color: var(--text); }
 
 <div class="conversation" id="conversation">
   <div class="empty-state" id="emptyState">
-    <div class="icon">🗣️</div>
-    <p>Start a conversation<br>Click the microphone or type a message</p>
+    <div class="icon">🎙️</div>
+    <p>Welcome to Talk AI<br>Let's practice English speaking together</p>
+    <button class="enable-mic-btn" id="enableMicBtn" onclick="enableMic()">Enable Microphone</button>
+    <div class="mic-status" id="micStatus"><span class="dot off"></span> Microphone not ready</div>
   </div>
 </div>
 
@@ -259,7 +278,7 @@ header .api-link:hover { color: var(--text); }
 </div>
 
 <div class="input-area">
-  <button class="btn mic" id="micBtn" onclick="toggleMic()" title="Click or hold Space to record">
+  <button class="btn mic" id="micBtn" onclick="toggleMic()" title="Click or hold Space to record" disabled>
     🎤
   </button>
   <input id="msgInput" type="text" placeholder="Type or hold Space to speak..."
@@ -283,10 +302,10 @@ let isRecording = false;
 let spaceHeld = false;
 let spaceHeldTimer = null;
 let abortController = null;
+let micReady = false;
 
 // ── DOM refs ───────────────────────────────────────
 const conversation = document.getElementById('conversation');
-const emptyState = document.getElementById('emptyState');
 const msgInput = document.getElementById('msgInput');
 const sendBtn = document.getElementById('sendBtn');
 const micBtn = document.getElementById('micBtn');
@@ -306,13 +325,50 @@ function initRecognition() {
   return rec;
 }
 
+function enableMic() {
+  const rec = initRecognition();
+  if (!rec) {
+    msgInput.placeholder = 'Speech not supported — type instead';
+    return;
+  }
+  // Trigger permission dialog, then immediately stop
+  rec.onresult = () => {};
+  rec.onend = () => { setMicReady(true); };
+  rec.onerror = () => { setMicReady(false); };
+  try {
+    rec.start();
+    rec.stop();
+  } catch (e) {
+    // Permission denied or not available
+    setMicReady(false);
+  }
+}
+
+function setMicReady(ready) {
+  micReady = ready;
+  micBtn.disabled = !ready;
+  if (ready) {
+    const esIcon = document.querySelector('#emptyState .icon');
+    const esP = document.querySelector('#emptyState p');
+    if (esIcon) esIcon.textContent = '🗣️';
+    if (esP) esP.innerHTML = 'Microphone ready!<br>Hold <kbd>Space</kbd> or click 🎤 to speak';
+    const eBtn = document.getElementById('enableMicBtn');
+    if (eBtn) eBtn.remove();
+    const mStatus = document.getElementById('micStatus');
+    if (mStatus) {
+      mStatus.className = 'mic-status ready';
+      mStatus.innerHTML = '<span class="dot on"></span> Microphone ready';
+    }
+    msgInput.placeholder = 'Hold Space to speak, or type...';
+    msgInput.focus();
+  }
+}
+
 function startRecording() {
+  if (!micReady) return false;
   if (!recognition) {
     recognition = initRecognition();
-    if (!recognition) {
-      msgInput.placeholder = 'Speech not supported — type instead';
-      return false;
-    }
+    if (!recognition) return false;
     recognition.onresult = (e) => {
       const text = e.results[0][0].transcript;
       msgInput.value = text;
@@ -323,6 +379,7 @@ function startRecording() {
     };
     recognition.onerror = (e) => {
       setRecordingUI(false);
+      spaceHeld = false;
       if (e.error !== 'aborted') msgInput.placeholder = 'Mic error — type instead';
     };
   }
@@ -331,7 +388,9 @@ function startRecording() {
     recognition.start();
     setRecordingUI(true);
     return true;
-  } catch(e) {
+  } catch (e) {
+    // Permission lost or abort error — reset state
+    spaceHeld = false;
     return false;
   }
 }
@@ -397,7 +456,8 @@ function updateSpeed() {
 
 // ── Messages ───────────────────────────────────────
 function addMessage(role, text, corrections) {
-  if (emptyState) emptyState.remove();
+  const es = document.getElementById('emptyState');
+  if (es) es.remove();
 
   const div = document.createElement('div');
   div.className = 'msg ' + role;
@@ -553,7 +613,7 @@ document.addEventListener('keydown', (e) => {
     stopRecording();
     sendBtn.disabled = false;
     msgInput.disabled = false;
-    msgInput.placeholder = 'Type or hold Space to speak...';
+    msgInput.placeholder = 'Hold Space to speak, or type...';
     msgInput.focus();
     return;
   }
@@ -561,8 +621,8 @@ document.addEventListener('keydown', (e) => {
   // Don't intercept space when focused on input with text
   if (document.activeElement === msgInput && msgInput.value.trim()) return;
   // Walkie-talkie: space held = start recording
-  e.preventDefault();
-  if (!spaceHeld && !isRecording) {
+  if (!spaceHeld && !isRecording && micReady) {
+    e.preventDefault();
     spaceHeld = true;
     spaceHeldTimer = Date.now();
     startRecording();
@@ -575,6 +635,13 @@ document.addEventListener('keyup', (e) => {
     if (Date.now() - spaceHeldTimer > 300 && isRecording) {
       stopRecording();
     }
+  }
+});
+
+// Reset held state when window regains focus (handles permission dialog stealing focus)
+window.addEventListener('focus', () => {
+  if (spaceHeld && !isRecording) {
+    spaceHeld = false;
   }
 });
 
@@ -592,7 +659,13 @@ function resetSession() {
   const empty = document.createElement('div');
   empty.className = 'empty-state';
   empty.id = 'emptyState';
-  empty.innerHTML = '<div class="icon">🗣️</div><p>New session started<br>Click the microphone or type a message</p>';
+  if (micReady) {
+    empty.innerHTML = '<div class="icon">🗣️</div><p>New session started<br>Hold <kbd>Space</kbd> or click 🎤 to speak</p>';
+  } else {
+    empty.innerHTML = '<div class="icon">🎙️</div><p>New session started<br>Let\'s practice English speaking together</p>'
+      + '<button class="enable-mic-btn" onclick="enableMic()">Enable Microphone</button>'
+      + '<div class="mic-status"><span class="dot off"></span> Microphone not ready</div>';
+  }
   conversation.appendChild(empty);
 }
 </script>
