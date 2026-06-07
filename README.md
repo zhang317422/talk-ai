@@ -33,16 +33,10 @@ cp .env.example .env
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000` for the test page, or `http://localhost:8000/api` for API docs.
+> **Note:** The `uvicorn` command must be run from the `backend/` directory, since `main:app` references `main.py` in that directory.
 
-### API Endpoints
+Open `http://localhost:8000` in your browser, or `http://localhost:8000/api` for API docs.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/health` | Health check |
-| GET | `/api` | API documentation |
-| POST | `/api/tutor` | Tutor chat (JSON) |
-| POST | `/api/tutor/stream` | Tutor chat (SSE stream) |
-| POST | `/api/tutor/reset` | Clear session history |
+## Demo
 
-See `http://localhost:8000/api` for full request/response examples.
+[Watch the demo video on Bilibili](https://www.bilibili.com/video/BV1dtEh6FEyo)
