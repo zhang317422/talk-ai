@@ -410,6 +410,11 @@ function startRecording() {
     hasRecognizedSpeech = true;
     previewText.textContent = 'Rec: ' + pendingTranscript;
     previewText.classList.add('visible');
+    // Mic-click mode: auto-send immediately on final result
+    if (!spaceHeld) {
+      setRecordingUI(false);
+      flushTranscript();
+    }
   };
   recognition.onend = () => {
     if (spaceHeld) {
@@ -488,8 +493,8 @@ function setRecordingUI(active) {
 
 function toggleMic() {
   if (isRecording) {
-    stopRecording();
     flushTranscript();
+    stopRecording();
   } else {
     startRecording();
   }
@@ -708,8 +713,8 @@ document.addEventListener('keyup', (e) => {
   if (e.code === 'Space' && spaceHeld) {
     spaceHeld = false;
     setRecordingUI(false);
-    stopRecording();
     flushTranscript();
+    stopRecording();
   }
 });
 
