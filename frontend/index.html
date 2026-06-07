@@ -345,7 +345,7 @@ function initRecognition() {
 
   const rec = new SpeechRecognition();
   rec.lang = 'en-US';
-  rec.interimResults = false;
+  rec.interimResults = true;
   rec.continuous = false;
   return rec;
 }
@@ -406,12 +406,14 @@ function startRecording() {
   }
 
   recognition.onresult = (e) => {
-    pendingTranscript = e.results[0][0].transcript;
+    const isFinal = e.results[e.results.length - 1].isFinal;
+    pendingTranscript = Array.from(e.results)
+      .map(r => r[0].transcript).join('');
     hasRecognizedSpeech = true;
     previewText.textContent = 'Rec: ' + pendingTranscript;
     previewText.classList.add('visible');
     // Mic-click mode: auto-send immediately on final result
-    if (!spaceHeld) {
+    if (!spaceHeld && isFinal) {
       setRecordingUI(false);
       flushTranscript();
     }
@@ -432,12 +434,21 @@ function startRecording() {
     }
   };
   recognition.onerror = (e) => {
+    console.debug('SpeechRecognition error:', e.error);
     setRecordingUI(false);
     spaceHeld = false;
     pendingTranscript = '';
     hasRecognizedSpeech = false;
     previewText.classList.remove('visible');
-    if (e.error !== 'aborted') msgInput.placeholder = 'Mic error — type instead';
+    // 'aborted': we called stop() — normal, ignore
+    // 'no-speech': user didn't speak — normal, silently reset
+    // 'network': Chrome flakiness — silently reset
+    if (e.error === 'aborted' || e.error === 'no-speech' || e.error === 'network') {
+      recognition = null; // re-create next time (Chrome makes it unusable after error)
+      return;
+    }
+    recognition = null;
+    msgInput.placeholder = 'Mic error — type instead';
   };
 
   pendingTranscript = '';
@@ -700,10 +711,12 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.code !== 'Space') return;
-  // Don't intercept space when focused on input with text
+  // Don't intercept space when focused on input with text — let typing work
   if (document.activeElement === msgInput && msgInput.value.trim()) return;
   if (!spaceHeld && !isRecording && micReady) {
     e.preventDefault();
+    // Blur input so space doesn't type a character
+    if (document.activeElement === msgInput) msgInput.blur();
     spaceHeld = true;
     startRecording();
   }
